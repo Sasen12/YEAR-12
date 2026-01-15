@@ -19,6 +19,14 @@ python run_migrations.py
 uvicorn app.main:app --reload --port 8000
 ```
 
+Alternatively run the included helper script which creates a venv,
+installs deps, runs migrations and tests:
+
+```powershell
+.
+\scripts\dev_setup_and_test.ps1
+```
+
 Run tests:
 ```powershell
 pytest -q

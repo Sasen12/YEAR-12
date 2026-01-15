@@ -57,8 +57,6 @@ def ocr_file_to_lines(file_bytes: bytes, filename: str, engines: List[str] | Non
                 lines = _image_to_lines_troc(file_bytes)
             else:
                 continue
-            else:
-                continue
             if lines:
                 return (lines, eng, warnings) if return_meta else lines
             else:

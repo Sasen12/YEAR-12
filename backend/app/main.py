@@ -47,19 +47,14 @@ if settings.ALLOW_DEV_CORS:
 
 # Serve static files (simple test page lives here)
 # This lets you open /static/simple.html while the API is running.
-static_dir = Path(__file__).resolve().parent / "static"
+static_dir = Path(__file__).resolve().parent.parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 create_db_and_tables()
 
-def get_db():
-    # Dependency used by endpoints to hand out a short-lived DB session per request.
-    with Session(engine) as session:
-        yield session
-
 @app.post('/auth/register')
-def register(payload: RegisterIn, db: Session = Depends(get_db)):
+def register(payload: RegisterIn, db: Session = Depends(get_session)):
     """Register a new user (idempotent).
 
     Returns existing user if the username already exists to make the
@@ -74,7 +69,7 @@ def register(payload: RegisterIn, db: Session = Depends(get_db)):
     return {'id': user.id, 'username': user.username}
 
 @app.post('/auth/login')
-def login(payload: RegisterIn, db: Session = Depends(get_db)):
+def login(payload: RegisterIn, db: Session = Depends(get_session)):
     """Authenticate a user and return a short-lived JWT token.
 
     The returned token contains `user_id` and `username` and is signed
@@ -87,7 +82,7 @@ def login(payload: RegisterIn, db: Session = Depends(get_db)):
     return {'access_token': token}
 
 @app.get('/softwaredev/questions')
-def list_questions(db: Session = Depends(get_db)):
+def list_questions(db: Session = Depends(get_session)):
     """List all questions for the subject `Software Development`.
 
     The response contains question metadata and the available answers
@@ -110,7 +105,7 @@ def list_questions(db: Session = Depends(get_db)):
     return out
 
 @app.post('/softwaredev/import')
-def import_questions(file: UploadFile = File(...), db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def import_questions(file: UploadFile = File(...), db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Upload a single file and import any questions found.
 
     The uploaded file may be CSV, TXT, JSON, PDF or DOCX. The endpoint is
@@ -126,14 +121,14 @@ def import_questions(file: UploadFile = File(...), db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail='file too large')
     svc = services.ImportService(db)
     try:
-        res = svc.import_file(content, file.filename, subject='Software Development')
+        res = svc.import_file(content, file.filename, subject='Software Development', deduplicate=False)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # res: {created, errors, warnings}
     return JSONResponse(status_code=200, content=res)
 
 @app.get('/softwaredev/quiz')
-def random_quiz(limit: int = 10, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def random_quiz(limit: int = 10, db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Return a random quiz of `limit` questions for the authenticated user.
 
     The endpoint is protected and returns the question text and answers.
@@ -153,7 +148,7 @@ def random_quiz(limit: int = 10, db: Session = Depends(get_db), user: models.Use
     return out
 
 @app.post('/softwaredev/grade')
-def grade(submission: QuizSubmission, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def grade(submission: QuizSubmission, db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Grade a submitted quiz.
 
     The request body contains a list of {question_id, given_answer} items.
@@ -171,7 +166,7 @@ def grade(submission: QuizSubmission, db: Session = Depends(get_db), user: model
     return result
 
 @app.post('/goals/set')
-def set_goal(week_start: date, goal_type: str, goal_value: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def set_goal(week_start: date, goal_type: str, goal_value: int, db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Set or update a weekly goal for the authenticated user.
 
     `goal_type` should be a short string like `quizzes` or `questions` and
@@ -185,7 +180,7 @@ def set_goal(week_start: date, goal_type: str, goal_value: int, db: Session = De
     return {'status': 'ok', 'goal_id': g.id}
 
 @app.get('/goals/progress')
-def get_progress(week_start: date, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def get_progress(week_start: date, db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Return the current goal progress for the given week start date.
 
     Progress is computed from stored quiz history for the authenticated user.
@@ -196,7 +191,7 @@ def get_progress(week_start: date, db: Session = Depends(get_db), user: models.U
 
 
 @app.post('/softwaredev/import_from_exams')
-def import_from_exams(year: int = None, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def import_from_exams(year: int = None, db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Scan the local `Exams/` folder (project root sibling) and import supported files.
     Optional `year` param restricts import to a specific year folder (e.g. 2019).
     """
@@ -267,7 +262,7 @@ def health():
 
 
 @app.post('/softwaredev/ocr_grade')
-def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
     """Grade handwritten answers by OCR-ing an uploaded image/PDF.
 
     `question_ids` should be a comma-separated list matching the order of answers
