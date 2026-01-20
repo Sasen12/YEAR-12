@@ -13,3 +13,5 @@ pytest==7.4.0
 pytest-asyncio==0.21.0
 httpx==0.24.1
 pytesseract==0.3.10
+
+numpy==2.4.1
