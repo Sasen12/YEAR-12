@@ -1,5 +1,6 @@
 import io
 import json
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -46,3 +47,15 @@ def test_ocr_read_saves_training_sample(monkeypatch, tmp_path):
     assert lines
     parsed = json.loads(lines[-1])
     assert parsed["expected_text"] == "hello world"
+
+
+def test_ocr_read_timeout(monkeypatch):
+    def slow_ocr(*_args, **_kwargs):
+        time.sleep(0.25)
+        return (["late"], "rapidocr", [])
+
+    monkeypatch.setattr("app.main.ocr_file_to_lines", slow_ocr)
+    monkeypatch.setenv("OCR_REQUEST_TIMEOUT_SECONDS", "0.05")
+    files = {"file": ("note.png", _make_png(), "image/png")}
+    r = client.post("/ocr/read", files=files)
+    assert r.status_code == 504

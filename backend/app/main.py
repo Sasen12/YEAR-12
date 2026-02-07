@@ -21,6 +21,8 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
+import concurrent.futures
+import os
 from .database import engine, create_db_and_tables, get_session
 from . import services, repositories, models
 from .auth import get_current_user
@@ -322,7 +324,18 @@ def ocr_read(
         raise HTTPException(status_code=400, detail="file too large")
 
     try:
-        lines, engine_used, warnings = ocr_file_to_lines(payload, file.filename, return_meta=True)
+        timeout_s = float(os.getenv("OCR_REQUEST_TIMEOUT_SECONDS", "30"))
+    except Exception:
+        timeout_s = 30.0
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(ocr_file_to_lines, payload, file.filename, None, True)
+            lines, engine_used, warnings = fut.result(timeout=timeout_s)
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"OCR timed out after {timeout_s:.0f}s. Try a tighter crop or smaller image.",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OCR failed: {e}")
 

@@ -1,0 +1,17 @@
+{
+  "id": "54180060de5f4dcb8764581ff06fefad",
+  "created_at": "2026-02-07T07:19:24.013776+00:00",
+  "filename": "20260207_175710.jpg",
+  "image_path": "C:\\Users\\sasen\\OneDrive - Crest Education\\Documents\\School\\2026\\Software Dev\\Code\\YEAR-12\\YEAR-12\\backend\\data\\ocr_training\\images\\54180060de5f4dcb8764581ff06fefad.jpg",
+  "expected_text": "categorical\r\nnominal\r\nordinal",
+  "predicted_lines": [
+    "Nominal",
+    "Ordinal"
+  ],
+  "predicted_text": "Nominal\nOrdinal",
+  "engine_used": "rapidocr",
+  "warnings": [
+    "best candidate: engine=rapidocr, variant=autocontrast_r90, score=88.87, avg_conf=0.83"
+  ],
+  "note": "grey led mechanical"
+}

@@ -84,13 +84,23 @@
       output.textContent = "Waiting for response...";
 
       try {
-        const res = await fetch(base + "/ocr/read", { method: "POST", body: fd });
+        const controller = new AbortController();
+        const timeoutMs = 35000;
+        let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch(base + "/ocr/read", { method: "POST", body: fd, signal: controller.signal });
+        clearTimeout(timeoutId);
+        timeoutId = null;
         const data = await res.json();
         output.textContent = JSON.stringify(data, null, 2);
         statusEl.textContent = res.ok ? "Done." : ("Failed: " + res.status);
       } catch (err) {
-        statusEl.textContent = "Request error.";
-        output.textContent = String(err);
+        if (String(err).includes("AbortError")) {
+          statusEl.textContent = "Timed out waiting for server response.";
+          output.textContent = "OCR timed out in browser after 35s. Try tighter crop / clearer image.";
+        } else {
+          statusEl.textContent = "Request error.";
+          output.textContent = String(err);
+        }
       }
     });
   </script>
