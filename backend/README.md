@@ -12,7 +12,7 @@ Features:
 
 Quick start (Windows PowerShell):
 ```powershell
-cd "c:\Users\sasen\OneDrive - Crest Education\Documents\School\2026\Software Dev\Code\Yr12 SAT\backend"
+cd "c:\Users\sasen\OneDrive - Crest Education\Documents\School\2026\Software Dev\Code\YEAR-12\YEAR-12\backend"
 python -m venv .venv; .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python run_migrations.py
@@ -26,6 +26,11 @@ installs deps, runs migrations and tests:
 .
 \scripts\dev_setup_and_test.ps1
 ```
+
+Notes:
+- The app is tested with modern Python 3.x and dependency ranges in `requirements.txt`.
+- Docker remains a good default for reproducible local runs (`python:3.11-slim` in `Dockerfile`).
+- Set `JWT_SECRET` to a long random value for any non-dev deployment.
 
 Run tests:
 ```powershell
@@ -41,7 +46,7 @@ If you have an `Exams/` folder next to the `backend/` folder (for example the re
 
 - To import from the command line (server machine):
 ```powershell
-cd "c:\Users\sasen\OneDrive - Crest Education\Documents\School\2026\Software Dev\Code\Yr12 SAT\backend"
+cd "c:\Users\sasen\OneDrive - Crest Education\Documents\School\2026\Software Dev\Code\YEAR-12\YEAR-12\backend"
 .venv\Scripts\Activate.ps1
 python scripts/import_exams.py --year 2019
 # or omit --year to import all years

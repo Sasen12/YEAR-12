@@ -6,7 +6,7 @@ Each class maps to a table and uses relationships where appropriate.
 
 from typing import Optional
 from sqlmodel import SQLModel, Field, Relationship
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import List
 
 
@@ -20,7 +20,7 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, nullable=False, unique=True)
     password_hash: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Question(SQLModel, table=True):
@@ -52,7 +52,7 @@ class QuizResult(SQLModel, table=True):
     """A stored quiz result for a user with aggregated score."""
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key='user.id')
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     score: Optional[int] = None
     percentage: Optional[float] = None
     total_questions: Optional[int] = None
@@ -80,4 +80,4 @@ class WeeklyGoal(SQLModel, table=True):
     week_start: date
     goal_type: str
     goal_value: int
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

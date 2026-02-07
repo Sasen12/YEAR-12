@@ -6,7 +6,7 @@ perform validation, execute domain logic and persist aggregates via
 repositories.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from passlib.context import CryptContext
 import jwt
 import os
@@ -19,7 +19,7 @@ from .utils.answer_keys import get_correct_answers_from_key
 from pathlib import Path
 
 PWD_CTX = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-JWT_SECRET = os.getenv('JWT_SECRET', 'change_me_for_prod')
+JWT_SECRET = os.getenv('JWT_SECRET', 'change_me_for_prod_minimum_32_chars')
 JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
 JWT_EXPIRE_HOURS = int(os.getenv('JWT_EXPIRE_HOURS', '24'))
 
@@ -50,7 +50,7 @@ class AuthService:
             return None
         if not PWD_CTX.verify(password, user.password_hash):
             return None
-        expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS)
+        expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
         payload = {"user_id": user.id, "username": user.username, "exp": int(expire.timestamp())}
         token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
         return token

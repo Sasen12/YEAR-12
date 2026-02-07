@@ -7,5 +7,5 @@ services:
     volumes:
       - .:/app
     environment:
-      - JWT_SECRET=change_me_for_prod
+      - JWT_SECRET=change_me_for_prod_minimum_32_chars
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
