@@ -16,8 +16,8 @@ Endpoints implemented:
 - GET /goals/progress
 """
 
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Form
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
@@ -30,6 +30,7 @@ from datetime import date
 from pathlib import Path
 from .utils.exam_loader import find_exam_files
 from .utils.ocr import ocr_file_to_lines
+from .utils.ocr_training import save_labeled_sample
 from .config import settings
 
 app = FastAPI(title="Software Development Study API")
@@ -246,6 +247,7 @@ def home():
         <ul>
           <li><a href="/docs">Swagger UI</a></li>
           <li><a href="/static/simple.html">Simple frontend tester</a></li>
+          <li><a href="/static/ocr_lab.html">OCR training lab</a></li>
         </ul>
         <p>Use <code>/auth/register</code> + <code>/auth/login</code> to get a token, then try <code>/softwaredev/quiz</code> or <code>/softwaredev/import_from_exams</code>.</p>
       </div>
@@ -253,6 +255,12 @@ def home():
     </html>
     """
 
+
+
+@app.get("/ocr")
+def ocr_lab_shortcut():
+    """Shortcut route to open the OCR training lab page."""
+    return RedirectResponse(url="/static/ocr_lab.html")
 
 
 @app.get("/health")
@@ -294,3 +302,49 @@ def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Dep
     result['ocr_warnings'] = warnings
     result['ocr_lines'] = lines
     return result
+
+
+@app.post("/ocr/read")
+def ocr_read(
+    file: UploadFile = File(...),
+    expected_text: str | None = Form(default=None),
+    note: str | None = Form(default=None),
+):
+    """Direct OCR test endpoint with optional labeled-sample persistence.
+
+    Upload an image/PDF and get extracted lines immediately. If `expected_text`
+    is included, the sample is saved to the OCR training dataset folder.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="no file")
+    payload = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
+    if len(payload) > settings.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="file too large")
+
+    try:
+        lines, engine_used, warnings = ocr_file_to_lines(payload, file.filename, return_meta=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OCR failed: {e}")
+
+    out = {
+        "engine_used": engine_used,
+        "ocr_lines": lines,
+        "ocr_text": "\n".join(lines),
+        "ocr_warnings": warnings,
+        "saved_for_training": False,
+    }
+
+    if expected_text is not None and expected_text.strip():
+        saved = save_labeled_sample(
+            file_bytes=payload,
+            filename=file.filename,
+            expected_text=expected_text.strip(),
+            predicted_lines=lines,
+            engine_used=engine_used,
+            warnings=warnings,
+            note=note,
+        )
+        out["saved_for_training"] = True
+        out["training_sample"] = saved
+
+    return out

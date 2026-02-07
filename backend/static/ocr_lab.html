@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OCR Training Lab</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 14px; width: 520px; }
+    label { display: block; margin: 10px 0; }
+    textarea, input[type="text"] { width: 100%; box-sizing: border-box; }
+    textarea { min-height: 90px; }
+    pre { background: #f6f6f6; border: 1px solid #ddd; padding: 10px; max-height: 360px; overflow: auto; }
+    img { max-width: 100%; border: 1px solid #ddd; border-radius: 6px; }
+    button { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>OCR Training Lab</h1>
+  <p>Upload a handwritten image, inspect OCR output, and optionally save a labeled sample for training.</p>
+
+  <div class="row">
+    <div class="panel">
+      <label>API Base URL
+        <input id="baseUrl" type="text" value="http://127.0.0.1:8000">
+      </label>
+      <label>Handwritten File
+        <input id="file" type="file" accept="image/*,.pdf">
+      </label>
+      <label>Expected Text (optional, used to save training label)
+        <textarea id="expectedText" placeholder="Type the exact ground truth text from the image."></textarea>
+      </label>
+      <label>Note (optional)
+        <input id="note" type="text" placeholder="e.g. messy cursive, dim light, blue pen">
+      </label>
+      <button id="runBtn">Run OCR</button>
+      <p id="status"></p>
+    </div>
+
+    <div class="panel">
+      <h3>Preview</h3>
+      <img id="preview" alt="Image preview will appear here">
+    </div>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="output">Ready.</pre>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const output = document.getElementById("output");
+    const statusEl = document.getElementById("status");
+    const runBtn = document.getElementById("runBtn");
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files[0];
+      if (!f) {
+        preview.removeAttribute("src");
+        return;
+      }
+      if (f.type.startsWith("image/")) {
+        preview.src = URL.createObjectURL(f);
+      } else {
+        preview.removeAttribute("src");
+      }
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const f = fileInput.files[0];
+      if (!f) {
+        statusEl.textContent = "Pick a file first.";
+        return;
+      }
+      const base = document.getElementById("baseUrl").value.trim().replace(/\/$/, "");
+      const fd = new FormData();
+      fd.append("file", f);
+      const expectedText = document.getElementById("expectedText").value.trim();
+      const note = document.getElementById("note").value.trim();
+      if (expectedText) fd.append("expected_text", expectedText);
+      if (note) fd.append("note", note);
+
+      statusEl.textContent = "Running OCR...";
+      output.textContent = "Waiting for response...";
+
+      try {
+        const res = await fetch(base + "/ocr/read", { method: "POST", body: fd });
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+        statusEl.textContent = res.ok ? "Done." : ("Failed: " + res.status);
+      } catch (err) {
+        statusEl.textContent = "Request error.";
+        output.textContent = String(err);
+      }
+    });
+  </script>
+</body>
+</html>

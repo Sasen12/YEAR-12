@@ -27,10 +27,19 @@ installs deps, runs migrations and tests:
 \scripts\dev_setup_and_test.ps1
 ```
 
+Fastest OCR lab start (one command):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_ocr_lab.ps1
+```
+This opens `http://127.0.0.1:8000/ocr` automatically.
+
 Notes:
 - The app is tested with modern Python 3.x and dependency ranges in `requirements.txt`.
 - Docker remains a good default for reproducible local runs (`python:3.11-slim` in `Dockerfile`).
 - Set `JWT_SECRET` to a long random value for any non-dev deployment.
+- OCR defaults to `rapidocr,tesseract` and supports preprocessing variants for better handwriting extraction.
+- Optional extra engines are available via `requirements-ocr-extras.txt`.
+- Tune OCR with env vars: `OCR_ENGINES` and `OCR_MIN_CONFIDENCE` (default `0.72`).
 
 Run tests:
 ```powershell
