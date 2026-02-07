@@ -21,8 +21,9 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
-import concurrent.futures
 import os
+import queue
+import threading
 from .database import engine, create_db_and_tables, get_session
 from . import services, repositories, models
 from .auth import get_current_user
@@ -55,6 +56,28 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 create_db_and_tables()
+
+
+def _run_ocr_with_timeout(payload: bytes, filename: str, timeout_s: float):
+    """Run OCR in a daemon thread and return promptly on timeout."""
+    out: queue.Queue = queue.Queue(maxsize=1)
+
+    def _work():
+        try:
+            result = ocr_file_to_lines(payload, filename, return_meta=True)
+            out.put((True, result))
+        except Exception as exc:
+            out.put((False, exc))
+
+    t = threading.Thread(target=_work, daemon=True)
+    t.start()
+    try:
+        ok, value = out.get(timeout=timeout_s)
+    except queue.Empty as exc:
+        raise TimeoutError(f"OCR timed out after {timeout_s:.0f}s") from exc
+    if ok:
+        return value
+    raise value
 
 @app.post('/auth/register')
 def register(payload: RegisterIn, db: Session = Depends(get_session)):
@@ -328,10 +351,8 @@ def ocr_read(
     except Exception:
         timeout_s = 30.0
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(ocr_file_to_lines, payload, file.filename, None, True)
-            lines, engine_used, warnings = fut.result(timeout=timeout_s)
-    except concurrent.futures.TimeoutError:
+        lines, engine_used, warnings = _run_ocr_with_timeout(payload, file.filename, timeout_s)
+    except TimeoutError:
         raise HTTPException(
             status_code=504,
             detail=f"OCR timed out after {timeout_s:.0f}s. Try a tighter crop or smaller image.",

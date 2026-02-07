@@ -77,16 +77,16 @@ _BUILTIN_LEXICON = {
 
 
 def _parse_engines() -> List[str]:
-    raw = os.getenv("OCR_ENGINES", "rapidocr,tesseract")
+    raw = os.getenv("OCR_ENGINES", "rapidocr")
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
 def _parse_min_confidence() -> float:
     try:
-        val = float(os.getenv("OCR_MIN_CONFIDENCE", "0.72"))
+        val = float(os.getenv("OCR_MIN_CONFIDENCE", "0.68"))
         return max(0.0, min(1.0, val))
     except Exception:
-        return 0.72
+        return 0.68
 
 
 def _parse_use_lexicon_correction() -> bool:
@@ -95,10 +95,18 @@ def _parse_use_lexicon_correction() -> bool:
 
 def _parse_lexicon_similarity_threshold() -> float:
     try:
-        val = float(os.getenv("OCR_LEXICON_MIN_SIMILARITY", "0.82"))
+        val = float(os.getenv("OCR_LEXICON_MIN_SIMILARITY", "0.70"))
         return max(0.0, min(1.0, val))
     except Exception:
-        return 0.82
+        return 0.70
+
+
+def _parse_max_image_side() -> int:
+    try:
+        val = int(os.getenv("OCR_MAX_IMAGE_SIDE", "1400"))
+        return max(600, min(4000, val))
+    except Exception:
+        return 1400
 
 
 def ocr_file_to_lines(file_bytes: bytes, filename: str, engines: List[str] | None = None, return_meta: bool = False):
@@ -116,14 +124,32 @@ def ocr_file_to_lines(file_bytes: bytes, filename: str, engines: List[str] | Non
         warnings.append("pdf_text returned no text; falling back to OCR")
 
     image = _load_image(file_bytes)
-    variants = _build_variants(image)
+    image = _downscale_if_needed(image, max_side=_parse_max_image_side())
     engines = engines or _parse_engines()
     min_conf = _parse_min_confidence()
+
+    # Fast path first: lightweight RapidOCR sweep on core rotations.
+    quick = _quick_rapidocr_pass(image)
+    if quick:
+        q_lines, q_variant, q_avg_conf = quick
+        warnings.append(f"fast-path: rapidocr {q_variant} avg_conf={q_avg_conf:.2f}")
+        corrected_lines = q_lines
+        if _parse_use_lexicon_correction():
+            corrected_lines, corrections = _lexicon_correct_lines(q_lines, q_avg_conf)
+            if corrections:
+                warnings.append("lexicon corrections: " + ", ".join(corrections))
+        if q_avg_conf >= min_conf:
+            if return_meta:
+                return (corrected_lines, "rapidocr", warnings)
+            return corrected_lines
+
+    variants = _build_variants(image)
 
     candidates: List[OCRCandidate] = []
     for eng in engines:
         try:
-            result = _run_engine_best_variant(eng, variants)
+            engine_variants = _select_variants_for_engine(eng, variants)
+            result = _run_engine_best_variant(eng, engine_variants)
             if not result or not result.lines:
                 warnings.append(f"{eng} returned no text")
                 continue
@@ -167,6 +193,16 @@ def _load_image(b: bytes) -> Image.Image:
         return Image.open(io.BytesIO(b)).convert("RGB")
     except Exception as exc:
         raise RuntimeError(f"Unsupported or invalid image input: {exc}") from exc
+
+
+def _downscale_if_needed(image: Image.Image, max_side: int) -> Image.Image:
+    w, h = image.size
+    longest = max(w, h)
+    if longest <= max_side:
+        return image
+    scale = max_side / float(longest)
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return image.resize(new_size, Image.Resampling.LANCZOS)
 
 
 def _pdf_to_lines(b: bytes) -> List[str]:
@@ -217,6 +253,43 @@ def _build_variants(image: Image.Image) -> List[tuple[str, np.ndarray]]:
     return variants
 
 
+def _select_variants_for_engine(engine_name: str, variants: List[tuple[str, np.ndarray]]) -> List[tuple[str, np.ndarray]]:
+    if engine_name == "rapidocr":
+        return variants
+    if engine_name == "tesseract":
+        preferred = []
+        for name, arr in variants:
+            if name.startswith("autocontrast_") or name.startswith("adaptive_threshold_"):
+                preferred.append((name, arr))
+        # Keep a bounded set for speed.
+        bounded = [v for v in preferred if v[0].endswith("_r0") or v[0].endswith("_r90") or v[0].endswith("_r270")]
+        return bounded[:6] if bounded else variants[:6]
+    return variants
+
+
+def _quick_rapidocr_pass(image: Image.Image) -> Optional[tuple[List[str], str, float]]:
+    base = ImageOps.autocontrast(ImageOps.grayscale(image))
+    best_lines: List[str] = []
+    best_variant = ""
+    best_conf = 0.0
+    best_score = -1.0
+    for angle in (0, 90, 270, 180):
+        arr = np.array(base.rotate(angle, expand=True))
+        lines, confs = _image_to_lines_rapidocr(arr)
+        if not lines:
+            continue
+        score = _score_candidate(lines, confs)
+        avg_conf = (sum(confs) / len(confs)) if confs else 0.0
+        if score > best_score:
+            best_score = score
+            best_lines = lines
+            best_variant = f"autocontrast_r{angle}"
+            best_conf = avg_conf
+    if not best_lines:
+        return None
+    return best_lines, best_variant, best_conf
+
+
 def _remove_blue_grid_lines(arr: np.ndarray) -> np.ndarray:
     """Reduce notebook/grid blue line noise that often distorts handwriting OCR."""
     if cv2 is None or arr.ndim != 3:
@@ -254,10 +327,17 @@ def _score_candidate(lines: List[str], confidences: List[float]) -> float:
     if not text:
         return -1.0
     avg_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
+    if len(text) < 3:
+        return (avg_conf * 10.0) - 20.0
+
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    word_count = len(words)
+    longest_word = max((len(w) for w in words), default=0)
     alpha_chars = sum(1 for ch in text if ch.isalpha())
     digit_chars = sum(1 for ch in text if ch.isdigit())
     penalty = sum(1 for ch in text if ch in "|~_") * 0.5
-    return (avg_conf * 100.0) + (alpha_chars * 0.45) + (digit_chars * 0.2) - penalty
+    short_word_penalty = 18.0 if longest_word < 3 else 0.0
+    return (avg_conf * 40.0) + (alpha_chars * 0.8) + (digit_chars * 0.25) + (word_count * 8.0) - penalty - short_word_penalty
 
 
 def _run_engine_on_array(engine_name: str, img_arr: np.ndarray) -> tuple[List[str], List[float]]:
