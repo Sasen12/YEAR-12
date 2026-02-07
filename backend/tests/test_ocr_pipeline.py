@@ -47,3 +47,20 @@ def test_ocr_file_to_lines_adds_low_confidence_warning(monkeypatch):
     assert lines == ["detected text"]
     assert engine == "rapidocr"
     assert any("manual review recommended" in w for w in warnings)
+
+
+def test_lexicon_corrects_close_word(monkeypatch):
+    monkeypatch.setenv("OCR_LEXICON_CORRECTION", "true")
+    monkeypatch.setenv("OCR_LEXICON_MIN_SIMILARITY", "0.8")
+    monkeypatch.setattr(ocr, "_load_lexicon", lambda: ["ordinal", "nominal"])
+    corrected, changes = ocr._lexicon_correct_lines(["brdinal"], avg_conf=0.5)
+    assert corrected == ["ordinal"]
+    assert any("brdinal->ordinal" in c for c in changes)
+
+
+def test_rotation_variants_are_created():
+    img = Image.new("RGB", (80, 40), "white")
+    variants = ocr._build_variants(img)
+    names = [n for n, _ in variants]
+    assert any(n.endswith("_r90") for n in names)
+    assert any(n.endswith("_r270") for n in names)
