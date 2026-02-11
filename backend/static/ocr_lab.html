@@ -85,7 +85,7 @@
 
       try {
         const controller = new AbortController();
-        const timeoutMs = 35000;
+        const timeoutMs = 70000;
         let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         const res = await fetch(base + "/ocr/read", { method: "POST", body: fd, signal: controller.signal });
         clearTimeout(timeoutId);
@@ -96,7 +96,7 @@
       } catch (err) {
         if (String(err).includes("AbortError")) {
           statusEl.textContent = "Timed out waiting for server response.";
-          output.textContent = "OCR timed out in browser after 35s. Try tighter crop / clearer image.";
+          output.textContent = "OCR timed out in browser after 70s. Try tighter crop / clearer image.";
         } else {
           statusEl.textContent = "Request error.";
           output.textContent = String(err);
