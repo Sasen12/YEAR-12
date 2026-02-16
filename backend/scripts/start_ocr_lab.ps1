@@ -4,7 +4,9 @@ param(
     [string]$Python = "py",
     [string]$VenvPath = ".venv",
     [int]$OcrTimeoutSeconds = 60,
-    [int]$OcrMaxImageSide = 1400
+    [int]$OcrMaxImageSide = 1400,
+    [string]$OcrEngines = "rapidocr",
+    [int]$OcrRateLimitPerMin = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,8 +24,12 @@ Write-Host "Installing requirements (if needed)..."
 
 $env:OCR_REQUEST_TIMEOUT_SECONDS = "$OcrTimeoutSeconds"
 $env:OCR_MAX_IMAGE_SIDE = "$OcrMaxImageSide"
+$env:OCR_ENGINES = "$OcrEngines"
+$env:OCR_RATE_LIMIT_PER_MIN = "$OcrRateLimitPerMin"
 Write-Host "OCR_REQUEST_TIMEOUT_SECONDS=$($env:OCR_REQUEST_TIMEOUT_SECONDS)"
 Write-Host "OCR_MAX_IMAGE_SIDE=$($env:OCR_MAX_IMAGE_SIDE)"
+Write-Host "OCR_ENGINES=$($env:OCR_ENGINES)"
+Write-Host "OCR_RATE_LIMIT_PER_MIN=$($env:OCR_RATE_LIMIT_PER_MIN)"
 
 $url = "http://$BindHost`:$Port/ocr"
 Write-Host "Opening OCR Lab at $url"

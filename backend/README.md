@@ -37,9 +37,19 @@ Notes:
 - The app is tested with modern Python 3.x and dependency ranges in `requirements.txt`.
 - Docker remains a good default for reproducible local runs (`python:3.11-slim` in `Dockerfile`).
 - Set `JWT_SECRET` to a long random value for any non-dev deployment.
-- OCR defaults to `rapidocr,tesseract` and supports preprocessing variants for better handwriting extraction.
+- OCR defaults to `rapidocr` and supports preprocessing + segmentation variants for better handwriting extraction.
 - Optional extra engines are available via `requirements-ocr-extras.txt`.
-- Tune OCR with env vars: `OCR_ENGINES` and `OCR_MIN_CONFIDENCE` (default `0.72`).
+- OCR lab now supports background jobs (`POST /ocr/jobs` + `GET /ocr/jobs/{job_id}`).
+- OCR observability stats are available at `GET /ocr/stats`.
+- Tune OCR with env vars in `.env.example` (`OCR_REQUEST_TIMEOUT_SECONDS`, `OCR_MAX_IMAGE_SIDE`, `OCR_RATE_LIMIT_PER_MIN`, etc.).
+
+OCR benchmarking:
+```powershell
+python scripts/eval_ocr.py
+# optional filters
+python scripts/eval_ocr.py --split val --limit 100
+```
+The script writes a JSON report to `data/ocr_training/reports/` by default.
 
 Run tests:
 ```powershell

@@ -16,14 +16,19 @@ Endpoints implemented:
 - GET /goals/progress
 """
 
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Form
-from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Form, Request
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 import os
+import io
+import json
+import logging
 import queue
 import threading
+import time
+import uuid
 from .database import engine, create_db_and_tables, get_session
 from . import services, repositories, models
 from .auth import get_current_user
@@ -31,12 +36,24 @@ from .schemas import RegisterIn, QuizSubmission
 import jwt
 from datetime import date
 from pathlib import Path
+from PIL import Image
 from .utils.exam_loader import find_exam_files
 from .utils.ocr import ocr_file_to_lines
 from .utils.ocr_training import save_labeled_sample
+from .utils.ocr_jobs import OCRJobStore
+from .utils.rate_limit import InMemoryRateLimiter
+from .utils.ocr_observability import get_ocr_stats
 from .config import settings
 
 app = FastAPI(title="Software Development Study API")
+logger = logging.getLogger("app.api")
+if not logger.handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+_ocr_rate_limiter = InMemoryRateLimiter()
+_ocr_jobs = OCRJobStore(
+    max_jobs=int(os.getenv("OCR_JOB_MAX_JOBS", "500")),
+    ttl_seconds=int(os.getenv("OCR_JOB_TTL_SECONDS", "86400")),
+)
 
 # Allow simple browser testing from file:// or localhost frontends
 # Wide-open CORS keeps local HTML testers (e.g., static/simple.html) working without extra config in dev.
@@ -56,6 +73,51 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 create_db_and_tables()
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    req_id = request.headers.get("X-Request-ID", uuid.uuid4().hex)
+    request.state.request_id = req_id
+    started = time.perf_counter()
+    response: Response
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        if request.url.path.startswith("/ocr"):
+            logger.exception(
+                "request_failed %s",
+                json.dumps(
+                    {
+                        "request_id": req_id,
+                        "path": request.url.path,
+                        "method": request.method,
+                        "duration_ms": elapsed_ms,
+                        "client": request.client.host if request.client else "unknown",
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+        raise
+    response.headers["X-Request-ID"] = req_id
+    elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+    if request.url.path.startswith("/ocr"):
+        logger.info(
+            "request_done %s",
+            json.dumps(
+                {
+                    "request_id": req_id,
+                    "path": request.url.path,
+                    "method": request.method,
+                    "status_code": response.status_code,
+                    "duration_ms": elapsed_ms,
+                    "client": request.client.host if request.client else "unknown",
+                },
+                ensure_ascii=True,
+            ),
+        )
+    return response
 
 
 def _run_ocr_with_timeout(payload: bytes, filename: str, timeout_s: float):
@@ -78,6 +140,74 @@ def _run_ocr_with_timeout(payload: bytes, filename: str, timeout_s: float):
     if ok:
         return value
     raise value
+
+
+def _validate_upload_filename(filename: str) -> None:
+    if not filename or len(filename) > 200:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename path")
+
+
+def _max_ocr_upload_bytes() -> int:
+    default_bytes = min(settings.MAX_UPLOAD_BYTES, 5 * 1024 * 1024)
+    try:
+        val = int(os.getenv("OCR_MAX_UPLOAD_BYTES", str(default_bytes)))
+        return max(128 * 1024, val)
+    except Exception:
+        return default_bytes
+
+
+def _sniff_upload_kind(payload: bytes, filename: str, content_type: str | None) -> str:
+    lower = filename.lower()
+    if payload[:4] == b"%PDF" or lower.endswith(".pdf") or content_type == "application/pdf":
+        return "pdf"
+    try:
+        Image.open(io.BytesIO(payload)).verify()
+        return "image"
+    except Exception:
+        raise HTTPException(status_code=415, detail="unsupported file content; expected image or PDF")
+
+
+def _enforce_ocr_rate_limit(request: Request) -> None:
+    max_per_min = int(os.getenv("OCR_RATE_LIMIT_PER_MIN", "60"))
+    window = int(os.getenv("OCR_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    key = f"{request.client.host if request.client else 'unknown'}:{request.url.path}"
+    allowed, retry_after = _ocr_rate_limiter.allow(key, max_per_min, window)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"rate limit exceeded; retry after {retry_after}s",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _ocr_job_worker(payload: bytes, filename: str, expected_text: str | None, note: str | None) -> dict:
+    try:
+        timeout_s = float(os.getenv("OCR_JOB_TIMEOUT_SECONDS", "120"))
+    except Exception:
+        timeout_s = 120.0
+    lines, engine_used, warnings = _run_ocr_with_timeout(payload, filename, timeout_s)
+    out = {
+        "engine_used": engine_used,
+        "ocr_lines": lines,
+        "ocr_text": "\n".join(lines),
+        "ocr_warnings": warnings,
+        "saved_for_training": False,
+    }
+    if expected_text is not None and expected_text.strip():
+        saved = save_labeled_sample(
+            file_bytes=payload,
+            filename=filename,
+            expected_text=expected_text.strip(),
+            predicted_lines=lines,
+            engine_used=engine_used,
+            warnings=warnings,
+            note=note,
+        )
+        out["saved_for_training"] = True
+        out["training_sample"] = saved
+    return out
 
 @app.post('/auth/register')
 def register(payload: RegisterIn, db: Session = Depends(get_session)):
@@ -295,7 +425,13 @@ def health():
 
 
 @app.post('/softwaredev/ocr_grade')
-def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Depends(get_session), user: models.User = Depends(get_current_user)):
+def ocr_grade(
+    request: Request,
+    question_ids: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_session),
+    user: models.User = Depends(get_current_user),
+):
     """Grade handwritten answers by OCR-ing an uploaded image/PDF.
 
     `question_ids` should be a comma-separated list matching the order of answers
@@ -303,9 +439,13 @@ def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Dep
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail='no file')
-    payload = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
-    if len(payload) > settings.MAX_UPLOAD_BYTES:
+    _enforce_ocr_rate_limit(request)
+    _validate_upload_filename(file.filename)
+    max_ocr_bytes = _max_ocr_upload_bytes()
+    payload = file.file.read(max_ocr_bytes + 1)
+    if len(payload) > max_ocr_bytes:
         raise HTTPException(status_code=400, detail='file too large')
+    _sniff_upload_kind(payload, file.filename, file.content_type)
     try:
         lines, engine_used, warnings = ocr_file_to_lines(payload, file.filename, return_meta=True)
     except Exception as e:
@@ -331,6 +471,7 @@ def ocr_grade(question_ids: str, file: UploadFile = File(...), db: Session = Dep
 
 @app.post("/ocr/read")
 def ocr_read(
+    request: Request,
     file: UploadFile = File(...),
     expected_text: str | None = Form(default=None),
     note: str | None = Form(default=None),
@@ -342,9 +483,13 @@ def ocr_read(
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="no file")
-    payload = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
-    if len(payload) > settings.MAX_UPLOAD_BYTES:
+    _enforce_ocr_rate_limit(request)
+    _validate_upload_filename(file.filename)
+    max_ocr_bytes = _max_ocr_upload_bytes()
+    payload = file.file.read(max_ocr_bytes + 1)
+    if len(payload) > max_ocr_bytes:
         raise HTTPException(status_code=400, detail="file too large")
+    _sniff_upload_kind(payload, file.filename, file.content_type)
 
     try:
         timeout_s = float(os.getenv("OCR_REQUEST_TIMEOUT_SECONDS", "30"))
@@ -367,7 +512,6 @@ def ocr_read(
         "ocr_warnings": warnings,
         "saved_for_training": False,
     }
-
     if expected_text is not None and expected_text.strip():
         saved = save_labeled_sample(
             file_bytes=payload,
@@ -380,5 +524,50 @@ def ocr_read(
         )
         out["saved_for_training"] = True
         out["training_sample"] = saved
-
     return out
+
+
+@app.post("/ocr/jobs", status_code=202)
+def create_ocr_job(
+    request: Request,
+    file: UploadFile = File(...),
+    expected_text: str | None = Form(default=None),
+    note: str | None = Form(default=None),
+):
+    """Queue OCR processing and return a job id for polling."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="no file")
+    _enforce_ocr_rate_limit(request)
+    _validate_upload_filename(file.filename)
+    max_ocr_bytes = _max_ocr_upload_bytes()
+    payload = file.file.read(max_ocr_bytes + 1)
+    if len(payload) > max_ocr_bytes:
+        raise HTTPException(status_code=400, detail="file too large")
+    _sniff_upload_kind(payload, file.filename, file.content_type)
+    created = _ocr_jobs.submit(
+        filename=file.filename,
+        payload=payload,
+        expected_text=expected_text,
+        note=note,
+        request_id=getattr(request.state, "request_id", ""),
+        worker=_ocr_job_worker,
+    )
+    return {
+        **created,
+        "status_url": f"/ocr/jobs/{created['job_id']}",
+    }
+
+
+@app.get("/ocr/jobs/{job_id}")
+def get_ocr_job(job_id: str):
+    """Poll background OCR job status."""
+    job = _ocr_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
+
+
+@app.get("/ocr/stats")
+def ocr_stats():
+    """Return OCR aggregate runtime stats from observability logs."""
+    return get_ocr_stats()

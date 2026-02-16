@@ -17,7 +17,7 @@
 </head>
 <body>
   <h1>OCR Training Lab</h1>
-  <p>Upload a handwritten image, inspect OCR output, and optionally save a labeled sample for training.</p>
+  <p>Upload a handwritten image, inspect OCR output, and optionally save a labeled sample for training. Jobs run in background and auto-refresh.</p>
 
   <div class="row">
     <div class="panel">
@@ -32,6 +32,9 @@
       </label>
       <label>Note (optional)
         <input id="note" type="text" placeholder="e.g. messy cursive, dim light, blue pen">
+      </label>
+      <label>Polling timeout (seconds)
+        <input id="pollTimeoutSec" type="number" value="120" min="10" max="600">
       </label>
       <button id="runBtn">Run OCR</button>
       <p id="status"></p>
@@ -66,6 +69,34 @@
       }
     });
 
+    async function pollJob(base, jobId, timeoutSec) {
+      const started = Date.now();
+      while (true) {
+        const res = await fetch(base + "/ocr/jobs/" + jobId);
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+        if (!res.ok) {
+          statusEl.textContent = "Failed: " + res.status;
+          return;
+        }
+        if (data.status === "succeeded") {
+          statusEl.textContent = "Done.";
+          return;
+        }
+        if (data.status === "failed") {
+          statusEl.textContent = "Failed: OCR job failed.";
+          return;
+        }
+        const elapsedSec = (Date.now() - started) / 1000;
+        if (elapsedSec > timeoutSec) {
+          statusEl.textContent = "Timed out waiting for background OCR job.";
+          return;
+        }
+        statusEl.textContent = "Running OCR... (" + Math.floor(elapsedSec) + "s)";
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+
     runBtn.addEventListener("click", async () => {
       const f = fileInput.files[0];
       if (!f) {
@@ -77,30 +108,26 @@
       fd.append("file", f);
       const expectedText = document.getElementById("expectedText").value.trim();
       const note = document.getElementById("note").value.trim();
+      const pollTimeoutSec = Number(document.getElementById("pollTimeoutSec").value || "120");
       if (expectedText) fd.append("expected_text", expectedText);
       if (note) fd.append("note", note);
 
-      statusEl.textContent = "Running OCR...";
+      statusEl.textContent = "Queueing OCR job...";
       output.textContent = "Waiting for response...";
 
       try {
-        const controller = new AbortController();
-        const timeoutMs = 70000;
-        let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        const res = await fetch(base + "/ocr/read", { method: "POST", body: fd, signal: controller.signal });
-        clearTimeout(timeoutId);
-        timeoutId = null;
+        const res = await fetch(base + "/ocr/jobs", { method: "POST", body: fd });
         const data = await res.json();
         output.textContent = JSON.stringify(data, null, 2);
-        statusEl.textContent = res.ok ? "Done." : ("Failed: " + res.status);
-      } catch (err) {
-        if (String(err).includes("AbortError")) {
-          statusEl.textContent = "Timed out waiting for server response.";
-          output.textContent = "OCR timed out in browser after 70s. Try tighter crop / clearer image.";
-        } else {
-          statusEl.textContent = "Request error.";
-          output.textContent = String(err);
+        if (!res.ok) {
+          statusEl.textContent = "Failed: " + res.status;
+          return;
         }
+        statusEl.textContent = "OCR job queued.";
+        await pollJob(base, data.job_id, pollTimeoutSec);
+      } catch (err) {
+        statusEl.textContent = "Request error.";
+        output.textContent = String(err);
       }
     });
   </script>

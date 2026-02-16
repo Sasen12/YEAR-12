@@ -6,3 +6,5 @@ app.db
 .env
 .DS_Store
 Thumbs.db
+backend/data/ocr_observability/
+backend/data/ocr_training/reports/

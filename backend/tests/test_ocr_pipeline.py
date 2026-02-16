@@ -52,7 +52,7 @@ def test_ocr_file_to_lines_adds_low_confidence_warning(monkeypatch):
 def test_lexicon_corrects_close_word(monkeypatch):
     monkeypatch.setenv("OCR_LEXICON_CORRECTION", "true")
     monkeypatch.setenv("OCR_LEXICON_MIN_SIMILARITY", "0.8")
-    monkeypatch.setattr(ocr, "_load_lexicon", lambda: ["ordinal", "nominal"])
+    monkeypatch.setattr(ocr, "_load_lexicon_weights", lambda: {"ordinal": 5, "nominal": 5})
     corrected, changes = ocr._lexicon_correct_lines(["brdinal"], avg_conf=0.5)
     assert corrected == ["ordinal"]
     assert any("brdinal->ordinal" in c for c in changes)
